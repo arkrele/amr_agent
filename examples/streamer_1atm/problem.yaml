@@ -1,0 +1,48 @@
+problem:
+  description: >
+    1 atm 等离子体流光放电模拟，二维轴对称 (r-z)。
+    初始网格为 256 (r) × 1792 (z) 非均匀结构化网格。
+    网格在 13 个物理特征坐标处需要精确对齐:
+      - z 方向: 放电间隙 (z_gap=1.3e-2)、反应区边界 (z_reaction_fall, z_reaction_first)、
+        阳极 (z_anode)、电流/功率积分上限、流光延伸上限、Ey·ne 峰值位置、
+        limiter 初始/后段位置、trigger 位置
+      - r 方向: 反应区最大半径 (r_reaction_max)、极板电流测量半径 (r_plate_current_max)
+    自适应目标: 在反应区、阳极附近、流光头部等关键区域加密网格，在其他区域放粗，
+    以在保持精度的同时控制总网格量 (NR × NZ)。
+  pde_type: "plasma-streamer"
+  geometry: "2D-axisymmetric"
+  boundary_conditions:
+    axis: {type: "symmetry"}
+    cathode: {type: "dielectric", voltage: "Vonowave"}
+    anode: {type: "grounded"}
+    farfield_r: {type: "neumann", value: 0.0}
+    farfield_z: {type: "neumann", value: 0.0}
+
+solver:
+  type: "user_template"
+  path: "./run_solver.py"
+  interface: "generic_cli"
+  params:
+    max_timesteps: 5000
+    _timeout: 7200
+
+mesh:
+  initial: "./inputdata"
+  format: "structured-1d-text"
+  max_cells: 2000000
+  max_nodes_z: 4096
+  max_nodes_r: 512
+
+budget:
+  max_solver_runs: 3
+  max_wall_time_minutes: 360
+
+output:
+  target_metrics:
+    - "peak_current"
+    - "final_current"
+    - "peak_power"
+    - "total_cells"
+    - "priflag"
+  convergence_tolerance: 0.02
+  output_dir: "./output"

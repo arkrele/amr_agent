@@ -1,0 +1,70 @@
+1	N2p	e	-	N(S)	N(S)	-	1.80E-13	0	0	0
+2	O2p	e	-	O(P)	O(P)	-	1.60E-13	0	0	0
+3	N4p	e	-	N2	N2	-	2.00E-12	0	0	0
+4	O4p	e	-	O2	O2	-	1.40E-12	0	0	0
+5	H3OpH2O3	e	-	H	H2O	H2O	6.50E-12	0	0	0
+6	N2O2p	e	-	N2	O2	-	1.30E-12	0	0	0
+7	N2p	e	-	N2	-	-	4.00E-18	0	0	0
+8	O2p	e	-	O2	-	-	4.00E-18	0	0	0
+9	N2p	Om	-	N2	O(P)	-	4.00E-13	0	0	0
+10	N2p	O2m	-	N2	O2	-	1.60E-13	0	0	0
+11	O2p	Om	-	O2	O(P)	-	9.60E-14	0	0	0
+12	O2p	O2m	-	O2	O2	-	4.20E-13	0	0	0
+13	N4p	N2	-	N2p	N2	N2	2.50E-21	0	0	0
+14	N4p	O2	-	O2p	N2	N2	2.50E-16	0	0	0
+15	O4p	N2	-	N2O2p	O2	-	6.72E-22	0	0	0
+16	O4p	O2	-	O2p	O2	O2	1.73E-19	0	0	0
+17	O4p	O2a	-	O2p	O2	O2	1.00E-16	0	0	0
+18	O4p	O2b	-	O2p	O2	O2	1.00E-16	0	0	0
+19	O4p	O(P)	-	O2p	O3	-	3.00E-16	0	0	0
+20	O4p	O(D)	-	O2p	O3	-	3.00E-16	0	0	0
+21	O4p	O(S)	-	O2p	O3	-	3.00E-16	0	0	0
+22	N2O2p	N2	-	O2p	N2	N2	4.26E-16	0	0	0
+# Teroratomic ion kinetics										
+23	N2O2p	O2	-	O4p	N2	-	1.00E-15	0	0	0
+24	N2p	N2	N2	N4p	N2	-	5.20E-41	0	0	0
+25	N2p	N2	O2	N4p	O2	-	5.20E-41	0	0	0
+26	O2p	O2	O2	O4p	O2	-	2.40E-42	0	0	0
+27	O2p	O2	N2	O4p	N2	-	2.40E-42	0	0	0
+28	O2p	N2	N2	N2O2p	N2	-	9.00E-43	0	0	0
+# Electron-detachment										
+29	O2m	O2	-	O2	O2	e	2.18278E-24	0	0	0
+30	O2m	N2	-	O2	N2	e	1.13498E-25	0	0	0
+# water related ion reaction										
+31	H2Op	e	-	OH	H	-	3.80E-13	0	0	0
+32	H2Op	e	-	H2	O(P)	-	1.40E-13	0	0	0
+33	H2Op	e	-	H	H	O(P)	1.73E-13	0	0	0
+34	H2Op	Om	-	H2O	O(P)	-	4.00E-13	0	0	0
+35	H2Op	O2m	-	H2O	O2	-	4.00E-13	0	0	0
+36	Hm	H2O	-	OHm	H2	-	3.80E-15	0	0	0
+37	Hm	H	-	H2	e	-	2.00E-15	0	0	0
+38	Hm	O2	-	HO2	e	-	1.20E-15	0	0	0
+39	OHm	H	-	H2O	e	-	1.40E-15	0	0	0
+40	OHm	O(P)	-	HO2	e	-	2.00E-16	0	0	0
+41	O2p	H2O	N2	O2pH2O	N2	-	2.60E-40	0	0	0
+42	O2p	H2O	O2	O2pH2O	O2	-	2.60E-40	0	0	0
+43	O4p	H2O	-	O2pH2O	O2	-	1.70E-15	0	0	0
+44	O2pH2O	H2O	-	H3Op	OH	O2	1.30E-15	0	0	0
+45	O2m	O2p	-	O(P)	O(P)	O2	9.76E-13	0	0	0
+46	O2m	O4p	-	O(P)	O(P)	O2	9.76E-13	0	0	0
+# 45ÇÕóvëfêîÇ™ë´ÇËÇ»Ç¢ÇÃÇ≈ÅAé_ëfï™à≥ÇîΩâûåWêîÇ…Ç©ÇØÇΩ										
+# 46ÇÕóvëfêîÇ™ë´ÇËÇƒÇ¢Ç»Ç¢Ç™åªèÛÇÕÇ±ÇÃÇ‹Ç‹ÅcÅB										
+#										
+47	H3Op	H2O	N2	H3OpH2O	N2	-	3.40E-39	0	0	0
+48	H3Op	H2O	O2	H3OpH2O	O2	-	3.40E-39	0	0	0
+49	H3OpH2O	H2O	N2	H3OpH2O2	N2	-	2.30E-39	0	0	0
+50	H3OpH2O	H2O	O2	H3OpH2O2	O2	-	2.30E-39	0	0	0
+51	H3OpH2O2	H2O	N2	H3OpH2O3	N2	-	2.40E-39	0	0	0
+52	H3OpH2O2	H2O	O2	H3OpH2O3	O2	-	2.40E-39	0	0	0										
+######										
+#35	O2m	O2a	-	O2	O2	e	2.00E-16	0	0	0
+#36	O2m	O(P)	-	O3	e	-	3.00E-16	0	0	0
+#37	Om	O2a	-	O3	e	-	3.00E-16	0	0	0
+#38	Om	O(P)	-	O2	e	-	2.00E-16	0	0	0
+#14	N4p	O(P)	-	Op	N2	N2	2.50E-16	0	0	0
+#15	N4p	O(D)	-	Op	N2	N2	2.50E-16	0	0	0
+#16	N4p	O(S)	-	Op	N2	N2	2.50E-16	0	0	0							
+#17	N4p	N(S)	-	Np	N2	N2	1.00E-17	0	0	0
+#18	N4p	N(D)	-	Np	N2	N2	1.00E-17	0	0	0
+#27	O4p	NO	-	NOp	O2	O2	1.00E-16	0	0	0
+#19	N4p	NO	-	NOp	N2	N2	4.00E-16	0	0	0
