@@ -1,0 +1,46 @@
+problem:
+  description: >
+    二维圆柱绕流，Re=100，不可压缩层流。
+    自由来流从左向右（U=1.0），预计在圆柱后方形成卡门涡街。
+    初始网格为均匀三角形网格，预期需要在圆柱表面边界层和尾流区加密。
+  pde_type: "navier-stokes"
+  geometry: "./geometry/cylinder.yaml"
+  boundary_conditions:
+    farfield:
+      type: "uniform_inlet"
+      u: 1.0
+      v: 0.0
+    cylinder:
+      type: "no_slip"
+    outlet:
+      type: "pressure_outlet"
+      p: 0.0
+    top_bottom:
+      type: "symmetry"
+
+solver:
+  type: "user_template"
+  path: "./solver/mock_ns_solver.py"
+  interface: "generic_cli"
+  params:
+    reynolds: 100
+    dt: 0.001
+    max_iterations: 5000
+    convection_scheme: "upwind"
+
+mesh:
+  initial: "./mesh/init.msh"
+  format: "gmsh"
+  max_cells: 100000
+
+budget:
+  max_solver_runs: 5
+  max_wall_time_minutes: 120
+
+output:
+  target_metrics:
+    - "drag_coefficient"
+    - "lift_coefficient"
+    - "strouhal_number"
+  convergence_tolerance: 0.01
+  output_dir: "./output"
