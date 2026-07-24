@@ -31,7 +31,11 @@ class Agent:
     @property
     def client(self) -> AsyncOpenAI:
         if self._client is None:
-            self._client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+            kwargs = {"api_key": os.environ.get("OPENAI_API_KEY")}
+            base_url = os.environ.get("OPENAI_BASE_URL")
+            if base_url:
+                kwargs["base_url"] = base_url
+            self._client = AsyncOpenAI(**kwargs)
         return self._client
 
     def _build_messages(self, user_message: str) -> list[dict[str, Any]]:

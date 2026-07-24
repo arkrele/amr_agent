@@ -6,6 +6,16 @@ import asyncio
 import sys
 from pathlib import Path
 
+# Load .env before anything else
+from pathlib import Path as _Path
+_env_path = _Path(__file__).resolve().parent.parent / ".env"
+if _env_path.exists():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_env_path)
+    except ImportError:
+        pass  # python-dotenv not installed, ignore
+
 # Fix Windows encoding
 if sys.platform == "win32":
     try:

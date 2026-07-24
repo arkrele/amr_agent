@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -36,6 +37,14 @@ from mesh_agent.verification.post_gate import run_post_gate
 from mesh_agent.verification.pre_gate import PreGate
 
 
+def _make_client() -> AsyncOpenAI:
+    kwargs = {"api_key": os.environ.get("OPENAI_API_KEY", "")}
+    base_url = os.environ.get("OPENAI_BASE_URL")
+    if base_url:
+        kwargs["base_url"] = base_url
+    return AsyncOpenAI(**kwargs)
+
+
 class Orchestrator:
     """Main orchestrator for the mesh adaptation agent.
 
@@ -55,7 +64,8 @@ class Orchestrator:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         # Shared OpenAI client
-        self.client = client or AsyncOpenAI()
+        self.client = client or _make_client()
+        self.reviewer_client = _make_client()  # Different instance for independence
 
         # Subsystems
         self.sm = StateMachine(State.IDLE)
@@ -75,7 +85,7 @@ class Orchestrator:
         self.skeptic = Skeptic(client=self.client)
         self.gatekeeper = Gatekeeper(client=self.client)
         self.programmer = Programmer(client=self.client)
-        self.reviewer = Reviewer(client=AsyncOpenAI())  # Different instance!
+        self.reviewer = Reviewer(client=self.reviewer_client)  # Different instance!
 
         # Solver
         solver_path = Path(problem.solver.path) if problem.solver.path else None
