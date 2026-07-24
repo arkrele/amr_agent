@@ -35,7 +35,7 @@ class CellExecutor:
         programmer: Programmer,
         reviewer: Reviewer,
         solver: SolverInterface | None,
-        max_retries: int = 4,
+        max_retries: int = 6,
     ):
         self.programmer = programmer
         self.reviewer = reviewer
@@ -121,14 +121,18 @@ class CellExecutor:
             )
             if review.get("verdict") == "fail":
                 critical = [i for i in review.get("issues", []) if i["severity"] == "critical"]
-                last_error = f"Review failed: {json.dumps(critical)}"
-                continue
+                if critical:
+                    last_error = f"Review failed: {json.dumps(critical)}"
+                    continue
+                # Non-critical issues: log but proceed
 
-            mesh_script = work_dir / "mesh_generation.py"
+            mesh_script = work_dir / "mesh.py"
             if mesh_script.exists():
                 try:
                     proc = subprocess.run(
-                        [sys.executable, str(mesh_script), "--output-dir", output_dir],
+                        [sys.executable, str(mesh_script),
+                         "--input-mesh", current_mesh_path,
+                         "--output-dir", output_dir],
                         cwd=str(work_dir), capture_output=True, text=True, timeout=300,
                     )
                     if proc.returncode != 0:

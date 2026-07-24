@@ -88,11 +88,18 @@ class WorktreeManager:
         self._run_git(["branch", "-D", branch], cwd=self.base_dir)
 
     def copy_inputs(self, worktree_path: Path, files: dict[str, str | Path]) -> None:
-        """Copy input files into the worktree."""
+        """Copy input files/directories into the worktree."""
         for dest_name, src_path in files.items():
             src = Path(src_path)
-            if src.exists():
-                shutil.copy2(str(src), str(worktree_path / dest_name))
+            if not src.exists():
+                continue
+            dst = worktree_path / dest_name
+            if src.is_dir():
+                if dst.exists():
+                    shutil.rmtree(dst)
+                shutil.copytree(str(src), str(dst))
+            else:
+                shutil.copy2(str(src), str(dst))
 
     def get_latest_metrics(self, name: str) -> Optional[Path]:
         """Get the metrics file from a completed worktree."""

@@ -99,7 +99,11 @@ class Orchestrator:
 
         # Context
         self.ctx = SessionContext()
-        self.ctx.current_mesh_path = problem.mesh.initial
+        # Resolve mesh path to absolute
+        mesh_initial = Path(problem.mesh.initial)
+        if not mesh_initial.is_absolute():
+            mesh_initial = self.output_dir.parent / mesh_initial
+        self.ctx.current_mesh_path = str(mesh_initial.resolve())
 
     async def run(self) -> Result:
         """Main loop: drive the state machine until CLOSED."""
@@ -133,7 +137,7 @@ class Orchestrator:
             except Exception as e:
                 self._log(f"Error in state {state.value}: {e}")
                 # Try to gracefully degrade
-                if state in (State.ANALYZE, State.DEBATE, State.GATE):
+                if state in (State.ANALYZE, State.DEBATE, State.GATE, State.EXECUTE, State.VERIFY):
                     self.sm.transition(State.DECIDE)
                 else:
                     self.sm.transition(State.SUMMARIZE)
@@ -166,28 +170,67 @@ class Orchestrator:
             self.sm.transition(State.ANALYZE)
             return
 
-        # Generate solver if no template
+        # Generate or reuse solver
         solver = self.solver
+        solver_path = self.output_dir / "solver.py"
+
+        if solver is None and solver_path.exists():
+            # Reuse previously generated solver
+            solver = UserTemplateSolver(solver_path)
+            self.solver = solver
+            self._log("Reusing existing solver")
+
         if solver is None:
-            self._log("No solver template — Agent will generate one")
-            impl = await self.programmer.generate_solver(
-                self.problem.model_dump(),
-                self.ctx.current_mesh_path,
-                str(self.output_dir / "output"),
-            )
-            solver_code = impl.get("solver_script", "")
-            if solver_code:
-                solver_path = self.output_dir / "solver.py"
+            # Generate solver with retry
+            for attempt in range(1, 7):
+                self._log(f"No solver template — Agent generating solver (attempt {attempt})")
+                impl = await self.programmer.generate_solver(
+                    self.problem.model_dump(),
+                    self.ctx.current_mesh_path,
+                    str(self.output_dir / "output"),
+                )
+                solver_code = impl.get("solver_script", "")
+                if not solver_code:
+                    continue
                 solver_path.write_text(solver_code, encoding="utf-8")
                 solver = UserTemplateSolver(solver_path)
-                self.solver = solver
-                self._log("Solver generated successfully")
+
+                # Test the solver
+                try:
+                    test_output = self.output_dir / "output"
+                    test_output.mkdir(parents=True, exist_ok=True)
+                    metrics = await solver.run(
+                        mesh_path=self.ctx.current_mesh_path,
+                        output_dir=str(test_output),
+                        params=self.problem.solver.params,
+                        work_dir=str(self.output_dir),
+                    )
+                except Exception:
+                    continue
+
+                if metrics.get("_success"):
+                    self.solver = solver
+                    self._log("Solver generated and tested successfully")
+                    # Got working solver, proceed to use these metrics
+                    break
             else:
-                self._log("WARNING: Solver generation produced empty output")
+                self._log("WARNING: Solver generation failed after 6 attempts")
                 self.sm.transition(State.ANALYZE)
                 return
 
-        # Run solver on initial mesh
+            # Use metrics from test run
+            self.ctx.current_metrics = Metrics(
+                custom={k: v for k, v in metrics.items()
+                        if isinstance(v, (int, float)) and not k.startswith("_")},
+                source_path=str(test_output / "metrics.json"),
+            )
+            self.budget.record_solver_run()
+            self.ctx.solver_runs += 1
+            self._log(f"Initial solve complete: {self.ctx.current_metrics.custom}")
+            self.sm.transition(State.ANALYZE)
+            return
+
+        # Solver exists (from template or reuse) — run it
         self._log("Running solver on initial mesh...")
         output_dir = self.output_dir / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -340,8 +383,17 @@ class Orchestrator:
 
         # Copy inputs to worktree
         input_files = {}
-        if self.ctx.current_mesh_path and Path(self.ctx.current_mesh_path).exists():
-            input_files["current_mesh.msh"] = self.ctx.current_mesh_path
+        mesh_src = Path(self.ctx.current_mesh_path)
+        if mesh_src.exists():
+            if mesh_src.is_dir():
+                input_files["input_mesh"] = self.ctx.current_mesh_path
+                worktree_mesh = str(wt_path / "input_mesh")
+            else:
+                input_files["current_mesh.msh"] = self.ctx.current_mesh_path
+                worktree_mesh = str(wt_path / "current_mesh.msh")
+        else:
+            worktree_mesh = self.ctx.current_mesh_path
+
         if self.problem.solver.path:
             input_files["solver.py"] = self.problem.solver.path
         self.worktree.copy_inputs(wt_path, input_files)
@@ -353,7 +405,7 @@ class Orchestrator:
         results = await self.executor.execute(
             strategy=strategy,
             work_dir=wt_path,
-            current_mesh_path=str(wt_path / "current_mesh.msh") if "current_mesh.msh" in input_files else self.ctx.current_mesh_path,
+            current_mesh_path=worktree_mesh,
             solver_path=str(wt_path / "solver.py") if self.problem.solver.path else "",
             problem_spec=self.problem.model_dump(),
             previous_metrics=prev_metrics,
@@ -370,6 +422,11 @@ class Orchestrator:
         # Commit worktree
         all_ok = all(r.success for r in results.values())
         self.worktree.commit(wt_path, f"Round {round_num}: {strategy.get('strategy_id')} — {'PASS' if all_ok else 'FAIL'}")
+
+        if not all_ok:
+            for cell_name, r in results.items():
+                if not r.success:
+                    self._log(f"  Cell [{cell_name}] FAILED (retries={r.retries}): {r.error[:200]}")
 
         self.ctx._execution_results = results  # type: ignore[attr-defined]
         self.ctx._worktree_path = wt_path  # type: ignore[attr-defined]

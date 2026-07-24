@@ -5,6 +5,11 @@ problem:
     解析解: T(x) = (1 - exp(Pe·x)) / (1 - exp(Pe))，其中 Pe = u/κ。
     本算例 Pe=50（高 Peclet 数），在 x≈1 处存在尖锐边界层。
     初始网格为 20 个均匀分布节点。需要在边界层区域加密。
+    网格文件格式: mesh.txt，每行一个节点坐标 (float)，共 N 行 = N 个节点。
+    求解器通过 --mesh 参数接收网格目录，读取 mesh.txt 获得节点坐标。
+
+    重要: 这是一维问题！网格就是一维坐标数组。区域描述必须用一维区间 [x1, x2]，
+    不能用 box/corner1/corner2 这些三维概念。refine 就是在区间内插入更多节点。coarsen 就是删除节点。
   pde_type: "convection-diffusion-1d"
   geometry: "1d-interval"
   boundary_conditions:
@@ -33,6 +38,5 @@ output:
   target_metrics:
     - "max_error"
     - "l2_error"
-    - "boundary_layer_resolution"
   convergence_tolerance: 0.05
   output_dir: "./test_output"

@@ -74,27 +74,49 @@ Your entire response must be the raw JSON object.
             messages=messages,
             temperature=kwargs.get("temperature", self.temperature),
             max_tokens=kwargs.get("max_tokens", self.max_tokens),
-            response_format={"type": "json_object"},
         )
-        raw = response.choices[0].message.content or "{}"
+        raw = (response.choices[0].message.content or "{}").strip()
+
+        # Try direct parse
         try:
             return json.loads(raw)
         except json.JSONDecodeError:
-            cleaned = raw.strip()
-            if cleaned.startswith("```"):
-                lines = cleaned.split("\n")
-                lines = [l for l in lines if not l.startswith("```")]
-                cleaned = "\n".join(lines)
+            pass
+
+        # Strip markdown code fences
+        cleaned = raw
+        if cleaned.startswith("```"):
+            lines = cleaned.split("\n")
+            lines = [l for l in lines if not l.startswith("```")]
+            cleaned = "\n".join(lines).strip()
+
+        # Try again
+        try:
             return json.loads(cleaned)
+        except json.JSONDecodeError:
+            pass
+
+        # Try to extract JSON object from the text
+        import re
+        match = re.search(r'\{.*\}', cleaned, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group())
+            except json.JSONDecodeError:
+                pass
+
+        # Last resort: return empty dict
+        return {}
 
 
 class StrongAgent(Agent):
     """Agent using a strong reasoning model (for Strategist, Optimist, Skeptic, Programmer, Reviewer)."""
     def __init__(self, name: str, system_prompt: str, client: Optional[AsyncOpenAI] = None):
+        model = os.environ.get("MESH_AGENT_STRONG_MODEL", "deepseek-chat")
         super().__init__(
             name=name,
             system_prompt=system_prompt,
-            model="gpt-4o",
+            model=model,
             temperature=0.3,
             max_tokens=4096,
             client=client,
@@ -104,10 +126,11 @@ class StrongAgent(Agent):
 class LightAgent(Agent):
     """Agent using a fast/cheap model (for Gatekeeper, Memory Keeper, etc.)."""
     def __init__(self, name: str, system_prompt: str, client: Optional[AsyncOpenAI] = None):
+        model = os.environ.get("MESH_AGENT_LIGHT_MODEL", "deepseek-chat")
         super().__init__(
             name=name,
             system_prompt=system_prompt,
-            model="gpt-4o-mini",
+            model=model,
             temperature=0.2,
             max_tokens=2048,
             client=client,
