@@ -214,8 +214,8 @@ class Orchestrator:
                     # Got working solver, proceed to use these metrics
                     break
             else:
-                self._log("WARNING: Solver generation failed after 6 attempts")
-                self.sm.transition(State.ANALYZE)
+                self._log("Solver generation failed after 6 attempts")
+                self.sm.transition(State.SUMMARIZE)
                 return
 
             # Use metrics from test run
@@ -260,6 +260,7 @@ class Orchestrator:
         self.budget.record_solver_run()
         self.ctx.solver_runs += 1
         self._log(f"Initial solve complete: {self.ctx.current_metrics.custom}")
+        self.ctx._mesh_before_path = self.ctx.current_mesh_path  # type: ignore[attr-defined]  # baseline for 1st round viz
         self.sm.transition(State.ANALYZE)
 
     async def _handle_analyze(self) -> None:
@@ -401,6 +402,9 @@ class Orchestrator:
         # Prepare previous metrics
         prev_metrics = self.ctx.current_metrics.custom if self.ctx.current_metrics else None
 
+        # Track mesh-before for visualization comparison
+        mesh_before_path = self.ctx._mesh_before_path if hasattr(self.ctx, "_mesh_before_path") else worktree_mesh
+
         # Run cell-by-cell execution
         results = await self.executor.execute(
             strategy=strategy,
@@ -409,6 +413,7 @@ class Orchestrator:
             solver_path=str(wt_path / "solver.py") if self.problem.solver.path else "",
             problem_spec=self.problem.model_dump(),
             previous_metrics=prev_metrics,
+            mesh_before_path=mesh_before_path,
         )
 
         # Track LLM calls from executor
@@ -531,6 +536,12 @@ class Orchestrator:
             after_values=after,
         )
 
+        # Extract visualization images
+        viz_result = results.get("visualization")
+        viz_images: list[str] = []
+        if viz_result and viz_result.success:
+            viz_images = viz_result.output.get("images", [])
+
         # Record round
         record = RoundRecord(
             round=round_num,
@@ -542,16 +553,19 @@ class Orchestrator:
             claim=claim_text,
             evidence_ref=claim.claim_id,
             verdict="ACCEPTED" if post_gate_result["passed"] and claim.status.value == "validated" else "REJECTED",
+            images=viz_images,
         )
         self.ctx.round_records.append(record)
 
         # Update best metrics
         self.ctx.best_metrics = after if after else self.ctx.best_metrics
 
-        # Update mesh path for next round
+        # Update mesh path for next round. Save old path for viz comparison.
+        old_mesh = self.ctx.current_mesh_path
         new_mesh = wt_path / "output" / "adapted_mesh.msh"
         if new_mesh.exists():
             self.ctx.current_mesh_path = str(new_mesh)
+            self.ctx._mesh_before_path = old_mesh  # type: ignore[attr-defined]
         elif mesh_quality_file.exists():
             # Try to find any generated mesh
             candidates = list(wt_path.glob("*.msh")) + list((wt_path / "output").glob("*.msh"))

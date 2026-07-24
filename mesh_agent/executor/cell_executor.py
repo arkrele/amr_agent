@@ -41,6 +41,8 @@ class CellExecutor:
         self.reviewer = reviewer
         self.solver = solver
         self.max_retries = max_retries
+        self._mesh_before = ""
+        self._metrics_before: Optional[dict[str, float]] = None
 
     # ── Main pipeline ──────────────────────────────────────────
 
@@ -52,8 +54,11 @@ class CellExecutor:
         solver_path: str,
         problem_spec: dict[str, Any],
         previous_metrics: Optional[dict[str, float]] = None,
+        mesh_before_path: str = "",
     ) -> dict[str, CellResult]:
         results: dict[str, CellResult] = {}
+        self._mesh_before = mesh_before_path or current_mesh_path
+        self._metrics_before = previous_metrics
 
         # Cell 1: mesh generation
         mesh_result = await self._cell_mesh(
@@ -88,6 +93,10 @@ class CellExecutor:
         # Cell 3: post-processing
         post_result = await self._cell_post(work_dir)
         results["post_processing"] = post_result
+
+        # Cell 4: visualization
+        viz_result = await self._cell_viz(work_dir, current_mesh_path, str(new_mesh_path))
+        results["visualization"] = viz_result
 
         return results
 
@@ -255,6 +264,44 @@ class CellExecutor:
                 continue
 
         return CellResult(cell_name="post_processing", success=False, output={}, retries=self.max_retries, error="Failed")
+
+    # ── Cell 4: Visualization ────────────────────────────────────
+
+    async def _cell_viz(
+        self,
+        work_dir: Path,
+        mesh_before: str,
+        mesh_after: str,
+    ) -> CellResult:
+        """Run visualization script to generate comparison plots."""
+        output_dir = work_dir / "output"
+        viz_script = work_dir / "viz.py"
+        if not viz_script.exists():
+            return CellResult(cell_name="visualization", success=True, output={"images": []})
+
+        metrics_before = self._metrics_before or {}
+
+        for attempt in range(1, 3):
+            try:
+                proc = subprocess.run(
+                    [sys.executable, str(viz_script),
+                     "--output-dir", str(output_dir),
+                     "--mesh-before", mesh_before,
+                     "--mesh-after", mesh_after,
+                     "--metrics-before", json.dumps(metrics_before),
+                     ],
+                    cwd=str(work_dir), capture_output=True, text=True, timeout=120,
+                )
+                images = list(output_dir.glob("*.png"))
+                return CellResult(
+                    cell_name="visualization", success=True,
+                    output={"images": [str(p) for p in images]},
+                    retries=attempt - 1,
+                )
+            except subprocess.TimeoutExpired:
+                continue
+
+        return CellResult(cell_name="visualization", success=True, output={"images": []})
 
     # ── Helpers ─────────────────────────────────────────────────
 

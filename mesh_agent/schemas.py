@@ -340,6 +340,7 @@ class RoundRecord(BaseModel):
     claim: str = ""
     evidence_ref: str = ""
     verdict: str = "PENDING"
+    images: list[str] = Field(default_factory=list)
 
 
 class ResultSummary(BaseModel):

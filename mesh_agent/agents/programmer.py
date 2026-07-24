@@ -30,6 +30,12 @@ Your job: given a mesh adaptation strategy, produce the code to implement it.
 - Read solver output and extract target metrics
 - Write metrics.json to --output-dir
 
+### Visualization Script
+- Generate comparison plots saved as PNG files to --output-dir
+- MUST include: (1) mesh node distribution before/after, (2) solution field before/after, (3) error distribution if analytical solution known
+- Use matplotlib. Accept --output-dir, --mesh-before, --mesh-after, --metrics-before, --metrics-after arguments
+- Save at minimum: `mesh_comparison.png`, `solution_comparison.png`
+
 ## Output Format
 Always respond with JSON:
 ```json
@@ -37,6 +43,7 @@ Always respond with JSON:
   "mesh_script": "complete Python script content",
   "solver_params": {"key": value},
   "post_script": "complete Python script content",
+  "viz_script": "complete Python viz script content",
   "changes_summary": "What was changed and why"
 }
 ```
@@ -88,9 +95,10 @@ Generate the mesh modification script, solver parameters, and post-processing sc
                 "mesh_script": {"type": "string"},
                 "solver_params": {"type": "object"},
                 "post_script": {"type": "string"},
+                "viz_script": {"type": "string"},
                 "changes_summary": {"type": "string"},
             },
-            "required": ["mesh_script", "solver_params", "post_script", "changes_summary"],
+            "required": ["mesh_script", "solver_params", "post_script", "viz_script", "changes_summary"],
         }
 
         result = await self.run_structured(user_message, schema)
@@ -146,11 +154,10 @@ Use numpy/scipy only. Keep it simple and self-contained."""
     def write_scripts(implementation: dict[str, Any], work_dir: Path) -> dict[str, Path]:
         """Write generated scripts to the work directory."""
         paths = {}
-        for key in ["mesh_script", "post_script", "solver_script"]:
+        for key in ["mesh_script", "post_script", "solver_script", "viz_script"]:
             if implementation.get(key):
                 fname = f"{key.replace('_script', '')}.py"
                 fpath = work_dir / fname
                 fpath.write_text(implementation[key], encoding="utf-8")
                 paths[key] = fpath
-        return paths
         return paths
