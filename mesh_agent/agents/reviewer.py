@@ -118,3 +118,47 @@ Review all code and parameters. Check correctness, strategy fidelity, numerical 
         }
 
         return await self.run_structured(user_message, schema)
+
+    async def review_solver(
+        self,
+        problem_spec: dict[str, Any],
+        solver_code: str,
+    ) -> dict[str, Any]:
+        """Review a generated solver script for correctness and completeness."""
+        user_message = f"""## Problem Specification
+{json.dumps(problem_spec, indent=2)}
+
+## Generated Solver
+```python
+{solver_code}
+```
+
+Review this solver script. Check:
+1. Correctness: Does the numerical method match the PDE type? Are BCs handled correctly?
+2. Completeness: Does it accept --mesh/--output-dir/--params? Does it write metrics.json?
+3. Stability: Will it converge for reasonable inputs? Any CFL/timestep issues?
+4. Executability: Can it run as `python solver.py --mesh <dir> --output-dir <dir> --params '{{}}'`?"""
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "verdict": {"type": "string", "enum": ["pass", "fail"]},
+                "issues": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "severity": {"type": "string", "enum": ["critical", "major", "minor"]},
+                            "dimension": {"type": "string", "enum": ["correctness", "completeness", "stability", "executability"]},
+                            "description": {"type": "string"},
+                            "suggestion": {"type": "string"},
+                        },
+                        "required": ["severity", "dimension", "description", "suggestion"],
+                    },
+                },
+                "summary": {"type": "string"},
+            },
+            "required": ["verdict", "issues", "summary"],
+        }
+
+        return await self.run_structured(user_message, schema)

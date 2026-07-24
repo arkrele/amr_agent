@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import subprocess
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
 from mesh_agent.agents.programmer import Programmer
 from mesh_agent.agents.reviewer import Reviewer
-from mesh_agent.solver_interface.base import SolverInterface
+from mesh_agent.solver_interface.base import SolverInterface, UserTemplateSolver
 
 
 @dataclass
@@ -26,23 +24,25 @@ class CellResult:
 
 
 class CellExecutor:
-    """Executes the Cell-by-Cell pipeline: mesh generation → solver → post-processing.
+    """Cell-by-Cell pipeline: mesh generation → solver → post-processing.
 
-    Each cell runs independently with up to N retries (default 4).
-    Failures trigger Programmer → Reviewer → retry loop within each cell.
+    Each cell independently retries up to N times (default 4).
+    If solver=None, generates solver via Programmer→Reviewer before Cell 2.
     """
 
     def __init__(
         self,
         programmer: Programmer,
         reviewer: Reviewer,
-        solver: SolverInterface,
+        solver: SolverInterface | None,
         max_retries: int = 4,
     ):
         self.programmer = programmer
         self.reviewer = reviewer
         self.solver = solver
         self.max_retries = max_retries
+
+    # ── Main pipeline ──────────────────────────────────────────
 
     async def execute(
         self,
@@ -53,57 +53,48 @@ class CellExecutor:
         problem_spec: dict[str, Any],
         previous_metrics: Optional[dict[str, float]] = None,
     ) -> dict[str, CellResult]:
-        """Run all cells in sequence. Returns results keyed by cell name."""
         results: dict[str, CellResult] = {}
 
-        # Cell 1: Generate mesh code + review + run
-        mesh_result = await self._run_cell(
-            "mesh_generation",
-            strategy,
-            work_dir,
-            current_mesh_path,
-            solver_path,
-            problem_spec,
-            previous_metrics,
+        # Cell 1: mesh generation
+        mesh_result = await self._cell_mesh(
+            strategy, work_dir, current_mesh_path, solver_path,
+            problem_spec, previous_metrics,
         )
         results["mesh_generation"] = mesh_result
         if not mesh_result.success:
             return results
 
-        # Get the new mesh path
-        new_mesh_path = work_dir / "output" / "adapted_mesh.msh"
-        if not new_mesh_path.exists():
-            # Try to find any generated mesh file
-            candidates = list(work_dir.glob("*.msh")) + list((work_dir / "output").glob("*.msh")) if (work_dir / "output").exists() else []
-            if candidates:
-                new_mesh_path = candidates[0]
-            else:
-                new_mesh_path = Path(current_mesh_path)
+        new_mesh_path = self._find_mesh(work_dir, current_mesh_path)
 
-        # Cell 2: Run solver
-        solver_result = await self._run_solver(
-            strategy,
-            work_dir,
-            new_mesh_path,
-            problem_spec,
+        # Cell 1.5: generate solver if none provided
+        actual_solver = self.solver
+        if actual_solver is None:
+            gen_result = await self._cell_solver_gen(
+                strategy, work_dir, str(new_mesh_path), problem_spec,
+            )
+            results["solver_generation"] = gen_result
+            if not gen_result.success:
+                return results
+            actual_solver = UserTemplateSolver(work_dir / "solver.py")
+
+        # Cell 2: run solver
+        solver_result = await self._cell_solver_run(
+            actual_solver, work_dir, new_mesh_path, problem_spec,
         )
         results["solver"] = solver_result
         if not solver_result.success:
             return results
 
-        # Cell 3: Post-processing
-        post_result = await self._run_post(
-            strategy,
-            work_dir,
-            problem_spec,
-        )
+        # Cell 3: post-processing
+        post_result = await self._cell_post(work_dir)
         results["post_processing"] = post_result
 
         return results
 
-    async def _run_cell(
+    # ── Cell 1: Mesh Generation ────────────────────────────────
+
+    async def _cell_mesh(
         self,
-        cell_name: str,
         strategy: dict[str, Any],
         work_dir: Path,
         current_mesh_path: str,
@@ -111,19 +102,16 @@ class CellExecutor:
         problem_spec: dict[str, Any],
         previous_metrics: Optional[dict[str, float]],
     ) -> CellResult:
-        """Cell 1: Generate code, review, run mesh script. Retry on failure."""
         output_dir = str(work_dir / "output")
         last_error: Optional[str] = None
 
         for attempt in range(1, self.max_retries + 1):
-            # Generate
             implementation = await self.programmer.implement(
                 strategy, current_mesh_path, solver_path, output_dir,
                 problem_spec, previous_metrics, error_context=last_error,
             )
             Programmer.write_scripts(implementation, work_dir)
 
-            # Review
             review = await self.reviewer.review(
                 strategy,
                 implementation.get("mesh_script", ""),
@@ -131,122 +119,155 @@ class CellExecutor:
                 implementation.get("solver_params", {}),
                 implementation.get("changes_summary", ""),
             )
-
             if review.get("verdict") == "fail":
-                critical_issues = [i for i in review.get("issues", []) if i["severity"] == "critical"]
-                last_error = f"Review failed: {json.dumps(critical_issues)}"
+                critical = [i for i in review.get("issues", []) if i["severity"] == "critical"]
+                last_error = f"Review failed: {json.dumps(critical)}"
                 continue
 
-            # Run mesh script
             mesh_script = work_dir / "mesh_generation.py"
             if mesh_script.exists():
                 try:
                     proc = subprocess.run(
                         [sys.executable, str(mesh_script), "--output-dir", output_dir],
-                        cwd=str(work_dir),
-                        capture_output=True,
-                        text=True,
-                        timeout=300,
+                        cwd=str(work_dir), capture_output=True, text=True, timeout=300,
                     )
                     if proc.returncode != 0:
-                        last_error = f"Mesh script error (attempt {attempt}):\nstdout: {proc.stdout[-1000:]}\nstderr: {proc.stderr[-1000:]}"
+                        last_error = f"Mesh script error (attempt {attempt}):\n{proc.stderr[-1000:]}"
                         continue
                 except subprocess.TimeoutExpired:
                     last_error = f"Mesh script timed out (attempt {attempt})"
                     continue
 
-            return CellResult(cell_name=cell_name, success=True, output=implementation, retries=attempt - 1)
+            return CellResult(cell_name="mesh_generation", success=True, output=implementation, retries=attempt - 1)
 
-        return CellResult(cell_name=cell_name, success=False, output={}, retries=self.max_retries, error=last_error or "Max retries exceeded")
+        return CellResult(cell_name="mesh_generation", success=False, output={}, retries=self.max_retries, error=last_error or "Max retries")
 
-    async def _run_solver(
+    # ── Cell 1.5: Solver Generation ────────────────────────────
+
+    async def _cell_solver_gen(
         self,
         strategy: dict[str, Any],
+        work_dir: Path,
+        mesh_path: str,
+        problem_spec: dict[str, Any],
+    ) -> CellResult:
+        output_dir = str(work_dir / "output")
+        last_error: Optional[str] = None
+
+        for attempt in range(1, self.max_retries + 1):
+            impl = await self.programmer.generate_solver(
+                problem_spec, mesh_path, output_dir, error_context=last_error,
+            )
+            solver_code = impl.get("solver_script", "")
+            if not solver_code:
+                last_error = "Programmer produced empty solver"
+                continue
+
+            (work_dir / "solver.py").write_text(solver_code, encoding="utf-8")
+
+            review = await self.reviewer.review_solver(problem_spec, solver_code)
+            if review.get("verdict") == "fail":
+                critical = [i for i in review.get("issues", []) if i["severity"] == "critical"]
+                last_error = f"Reviewer rejected: {json.dumps(critical)}"
+                continue
+
+            # Syntax check
+            try:
+                proc = subprocess.run(
+                    [sys.executable, "-c",
+                     f"compile(open(r'{work_dir / 'solver.py'}').read(), 'solver.py', 'exec')"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if proc.returncode != 0:
+                    last_error = f"Syntax error: {proc.stderr[-500:]}"
+                    continue
+            except Exception as e:
+                last_error = f"Smoke test failed: {e}"
+                continue
+
+            return CellResult(
+                cell_name="solver_generation", success=True,
+                output={"solver_path": str(work_dir / "solver.py"),
+                        "expected_metrics": impl.get("expected_metrics", [])},
+                retries=attempt - 1,
+            )
+
+        return CellResult(cell_name="solver_generation", success=False, output={}, retries=self.max_retries, error=last_error or "Generation failed")
+
+    # ── Cell 2: Solver Run ─────────────────────────────────────
+
+    async def _cell_solver_run(
+        self,
+        solver: SolverInterface,
         work_dir: Path,
         mesh_path: Path,
         problem_spec: dict[str, Any],
     ) -> CellResult:
-        """Cell 2: Run solver with retry on failure."""
         output_dir = work_dir / "output"
-        solver_params = problem_spec.get("solver", {}).get("params", {})
+        params = dict(problem_spec.get("solver", {}).get("params", {}))
         last_error: Optional[str] = None
 
         for attempt in range(1, self.max_retries + 1):
             try:
-                metrics = await self.solver.run(
-                    mesh_path=str(mesh_path),
-                    output_dir=str(output_dir),
-                    params=solver_params,
-                    work_dir=str(work_dir),
+                metrics = await solver.run(
+                    mesh_path=str(mesh_path), output_dir=str(output_dir),
+                    params=params, work_dir=str(work_dir),
                 )
-
                 if metrics.get("_success"):
-                    return CellResult(
-                        cell_name="solver",
-                        success=True,
-                        output=metrics,
-                        retries=attempt - 1,
-                    )
-
-                last_error = metrics.get("_error", "Unknown solver error")
-                solver_params = self._adjust_solver_params(solver_params, attempt, last_error)
-
+                    return CellResult(cell_name="solver", success=True, output=metrics, retries=attempt - 1)
+                last_error = metrics.get("_error", "Solver returned failure")
             except Exception as e:
                 last_error = str(e)
-                solver_params = self._adjust_solver_params(solver_params, attempt, last_error)
+            params = self._adjust_params(params, attempt, last_error)
 
-        return CellResult(cell_name="solver", success=False, output={}, retries=self.max_retries, error=last_error or "Solver failed after max retries")
+        return CellResult(cell_name="solver", success=False, output={}, retries=self.max_retries, error=last_error or "Solver failed")
 
-    async def _run_post(
-        self,
-        strategy: dict[str, Any],
-        work_dir: Path,
-        problem_spec: dict[str, Any],
-    ) -> CellResult:
-        """Cell 3: Run post-processing script."""
+    # ── Cell 3: Post-Processing ─────────────────────────────────
+
+    async def _cell_post(self, work_dir: Path) -> CellResult:
         output_dir = work_dir / "output"
         post_script = work_dir / "post_processing.py"
 
         if not post_script.exists():
-            # No post script needed — check if solver already produced metrics
-            metrics_file = output_dir / "metrics.json"
-            if metrics_file.exists():
-                return CellResult(cell_name="post_processing", success=True, output={"metrics_file": str(metrics_file)})
-            return CellResult(cell_name="post_processing", success=True, output={}, error="No post-processing script, no metrics found")
+            mf = output_dir / "metrics.json"
+            if mf.exists():
+                return CellResult(cell_name="post_processing", success=True, output={"metrics_file": str(mf)})
+            return CellResult(cell_name="post_processing", success=True, output={})
 
         for attempt in range(1, self.max_retries + 1):
             try:
                 proc = subprocess.run(
                     [sys.executable, str(post_script), "--output-dir", str(output_dir)],
-                    cwd=str(work_dir),
-                    capture_output=True,
-                    text=True,
-                    timeout=300,
+                    cwd=str(work_dir), capture_output=True, text=True, timeout=300,
                 )
                 if proc.returncode != 0:
-                    last_error = f"Post-processing error (attempt {attempt}):\n{proc.stderr[-1000:]}"
                     continue
-
-                metrics_file = output_dir / "metrics.json"
-                if metrics_file.exists():
-                    metrics = json.loads(metrics_file.read_text(encoding="utf-8"))
+                mf = output_dir / "metrics.json"
+                if mf.exists():
+                    metrics = json.loads(mf.read_text(encoding="utf-8"))
                     return CellResult(cell_name="post_processing", success=True, output=metrics, retries=attempt - 1)
-
                 return CellResult(cell_name="post_processing", success=True, output={}, retries=attempt - 1)
-
             except subprocess.TimeoutExpired:
                 continue
 
-        return CellResult(cell_name="post_processing", success=False, output={}, retries=self.max_retries, error="Post-processing failed")
+        return CellResult(cell_name="post_processing", success=False, output={}, retries=self.max_retries, error="Failed")
+
+    # ── Helpers ─────────────────────────────────────────────────
 
     @staticmethod
-    def _adjust_solver_params(params: dict[str, Any], attempt: int, error: str) -> dict[str, Any]:
-        """Adjust solver parameters on failure."""
-        adjusted = dict(params)
-        if "dt" in adjusted:
-            adjusted["dt"] = adjusted["dt"] * (0.5 ** attempt)
-        if "max_iterations" in adjusted:
-            adjusted["max_iterations"] = min(adjusted["max_iterations"] * 2, 100000)
-        if "relaxation" in adjusted:
-            adjusted["relaxation"] = max(0.1, adjusted["relaxation"] - 0.1 * attempt)
-        return adjusted
+    def _find_mesh(work_dir: Path, fallback: str) -> Path:
+        candidates = list(work_dir.glob("**/*.msh"))
+        if candidates:
+            return candidates[0]
+        return Path(fallback)
+
+    @staticmethod
+    def _adjust_params(params: dict[str, Any], attempt: int, _error: str) -> dict[str, Any]:
+        p = dict(params)
+        if "dt" in p:
+            p["dt"] = p["dt"] * (0.5 ** attempt)
+        if "max_iterations" in p:
+            p["max_iterations"] = min(p["max_iterations"] * 2, 100000)
+        if "relaxation" in p:
+            p["relaxation"] = max(0.1, p["relaxation"] - 0.1 * attempt)
+        return p

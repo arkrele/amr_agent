@@ -101,15 +101,61 @@ Generate the mesh modification script, solver parameters, and post-processing sc
         result = await self.run_structured(user_message, schema)
         return result
 
+    async def generate_solver(
+        self,
+        problem_spec: dict[str, Any],
+        mesh_path: str,
+        output_dir: str,
+        error_context: str | None = None,
+    ) -> dict[str, Any]:
+        """Generate a complete solver from scratch when no user template is provided."""
+        error_block = ""
+        if error_context:
+            error_block = f"\n\n## Previous Attempt Error\n{error_context}\nPlease fix this error."
+
+        user_message = f"""## Problem Specification
+{json.dumps(problem_spec, indent=2)}
+
+## Output Requirements
+- Mesh path: {mesh_path}
+- Output directory: {output_dir}
+
+## Task
+Generate a COMPLETE, self-contained Python solver script for this problem.
+The script must:
+1. Accept --mesh, --output-dir, --params arguments (argparse)
+2. Read the mesh file(s) from --mesh directory
+3. Solve the PDE described in the problem spec
+4. Write a `metrics.json` file to --output-dir with at minimum:
+   - "solver_convergence": {{"converged": bool, "residual_final": float, "residual_initial": float, "iterations": int}}
+   - All target metrics from the problem spec
+5. Write a `mesh_quality.json` with basic mesh statistics if applicable
+6. Be executable: `python solver.py --mesh <dir> --output-dir <dir> --params '{{}}'`
+{error_block}
+
+Use numpy/scipy only. Keep it simple and self-contained."""
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "solver_script": {"type": "string", "description": "Complete Python solver script"},
+                "expected_metrics": {"type": "array", "items": {"type": "string"}},
+                "explanation": {"type": "string"},
+            },
+            "required": ["solver_script", "expected_metrics", "explanation"],
+        }
+
+        return await self.run_structured(user_message, schema)
+
     @staticmethod
     def write_scripts(implementation: dict[str, Any], work_dir: Path) -> dict[str, Path]:
         """Write generated scripts to the work directory."""
         paths = {}
-        for key in ["mesh_script", "post_script"]:
+        for key in ["mesh_script", "post_script", "solver_script"]:
             if implementation.get(key):
-                ext = ".py"
                 fname = f"{key.replace('_script', '')}.py"
                 fpath = work_dir / fname
                 fpath.write_text(implementation[key], encoding="utf-8")
                 paths[key] = fpath
+        return paths
         return paths

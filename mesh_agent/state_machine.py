@@ -8,6 +8,7 @@ from typing import ClassVar
 
 class State(str, Enum):
     IDLE = "idle"
+    INIT_SOLVE = "init_solve"
     ANALYZE = "analyze"
     DEBATE = "debate"
     GATE = "gate"
@@ -20,7 +21,8 @@ class State(str, Enum):
 
 class StateMachine:
     TRANSITIONS: ClassVar[dict[State, list[State]]] = {
-        State.IDLE: [State.ANALYZE],
+        State.IDLE: [State.INIT_SOLVE],
+        State.INIT_SOLVE: [State.ANALYZE, State.SUMMARIZE],
         State.ANALYZE: [State.DEBATE, State.DECIDE],
         State.DEBATE: [State.GATE],
         State.GATE: [State.EXECUTE, State.DECIDE],

@@ -104,6 +104,8 @@ class Orchestrator:
             try:
                 if state == State.IDLE:
                     await self._handle_idle()
+                elif state == State.INIT_SOLVE:
+                    await self._handle_init_solve()
                 elif state == State.ANALYZE:
                     await self._handle_analyze()
                 elif state == State.DEBATE:
@@ -131,6 +133,80 @@ class Orchestrator:
     # ── State Handlers ──────────────────────────────────────────
 
     async def _handle_idle(self) -> None:
+        self.sm.transition(State.INIT_SOLVE)
+
+    async def _handle_init_solve(self) -> None:
+        """Run initial solve on the starting mesh before the first analysis.
+
+        If no solver is provided, generates one first.
+        If a solution already exists, skips to ANALYZE.
+        """
+        existing_metrics = self.output_dir / "output" / "metrics.json"
+        if existing_metrics.exists():
+            self._log("Existing solution found, skipping initial solve")
+            try:
+                data = json.loads(existing_metrics.read_text(encoding="utf-8"))
+                self.ctx.current_metrics = Metrics(
+                    custom={k: v for k, v in data.items()
+                            if isinstance(v, (int, float)) and not k.startswith("_")},
+                    source_path=str(existing_metrics),
+                )
+            except Exception:
+                pass
+            self.sm.transition(State.ANALYZE)
+            return
+
+        # Generate solver if no template
+        solver = self.solver
+        if solver is None:
+            self._log("No solver template — Agent will generate one")
+            impl = await self.programmer.generate_solver(
+                self.problem.model_dump(),
+                self.ctx.current_mesh_path,
+                str(self.output_dir / "output"),
+            )
+            solver_code = impl.get("solver_script", "")
+            if solver_code:
+                solver_path = self.output_dir / "solver.py"
+                solver_path.write_text(solver_code, encoding="utf-8")
+                solver = UserTemplateSolver(solver_path)
+                self.solver = solver
+                self._log("Solver generated successfully")
+            else:
+                self._log("WARNING: Solver generation produced empty output")
+                self.sm.transition(State.ANALYZE)
+                return
+
+        # Run solver on initial mesh
+        self._log("Running solver on initial mesh...")
+        output_dir = self.output_dir / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            metrics = await solver.run(
+                mesh_path=self.ctx.current_mesh_path,
+                output_dir=str(output_dir),
+                params=self.problem.solver.params,
+                work_dir=str(self.output_dir),
+            )
+        except Exception as e:
+            self._log(f"Initial solve failed: {e}")
+            self.sm.transition(State.SUMMARIZE)
+            return
+
+        if not metrics.get("_success"):
+            self._log(f"Initial solve failed: {metrics.get('_error', 'unknown')}")
+            self.sm.transition(State.SUMMARIZE)
+            return
+
+        self.ctx.current_metrics = Metrics(
+            custom={k: v for k, v in metrics.items()
+                    if isinstance(v, (int, float)) and not k.startswith("_")},
+            source_path=str(output_dir / "metrics.json"),
+        )
+        self.budget.record_solver_run()
+        self.ctx.solver_runs += 1
+        self._log(f"Initial solve complete: {self.ctx.current_metrics.custom}")
         self.sm.transition(State.ANALYZE)
 
     async def _handle_analyze(self) -> None:

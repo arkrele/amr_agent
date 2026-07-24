@@ -1,0 +1,11 @@
+{
+  "total_nodes": 20,
+  "total_cells": 19,
+  "min_cell_size": 0.05263157894736842,
+  "max_cell_size": 0.052631578947368474,
+  "range": [
+    0.0,
+    1.0
+  ],
+  "is_uniform": true
+}
