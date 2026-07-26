@@ -60,7 +60,13 @@ def main() -> None:
     default=None,
     help="OpenAI API key (or set OPENAI_API_KEY env var)",
 )
-def run(problem: str, output_dir: str, knowledge_dir: str | None, api_key: str | None) -> None:
+@click.option(
+    "-m", "--memory-dir",
+    default=None,
+    type=click.Path(),
+    help="Memory store directory for cross-session knowledge",
+)
+def run(problem: str, output_dir: str, knowledge_dir: str | None, api_key: str | None, memory_dir: str | None) -> None:
     """Run mesh adaptation on a problem specification.
 
     Example:
@@ -100,6 +106,7 @@ def run(problem: str, output_dir: str, knowledge_dir: str | None, api_key: str |
         problem=problem_spec,
         output_dir=output_dir,
         knowledge_dir=kd,
+        memory_dir=memory_dir,
     )
 
     result = asyncio.run(orchestrator.run())

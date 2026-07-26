@@ -17,9 +17,13 @@ from mesh_agent.agents.skeptic import Skeptic
 from mesh_agent.agents.gatekeeper import Gatekeeper
 from mesh_agent.agents.programmer import Programmer
 from mesh_agent.agents.reviewer import Reviewer
+from mesh_agent.agents.memory_keeper import MemoryKeeper
 from mesh_agent.budget import BudgetTracker
 from mesh_agent.executor.cell_executor import CellExecutor
 from mesh_agent.executor.worktree_manager import WorktreeManager
+from mesh_agent.executor.parallel_executor import ParallelExecutor
+from mesh_agent.memory import MemoryStore, MemoryRetriever, RoleRouter
+from mesh_agent.memory.role_router import ROLE_STRATEGIST
 from mesh_agent.schemas import (
     MeshQualityReport,
     Metrics,
@@ -57,6 +61,7 @@ class Orchestrator:
         problem: ProblemSpec,
         output_dir: str | Path,
         knowledge_dir: Optional[str | Path] = None,
+        memory_dir: Optional[str | Path] = None,
         client: Optional[AsyncOpenAI] = None,
     ):
         self.problem = problem
@@ -67,7 +72,14 @@ class Orchestrator:
         self.client = client or _make_client()
         self.reviewer_client = _make_client()  # Different instance for independence
 
-        # Subsystems
+        # ── Phase 2: Memory system ─────────────────────────────
+        md = Path(memory_dir) if memory_dir else (self.output_dir / ".memory")
+        self.memory_store = MemoryStore(md)
+        self.memory_retriever = MemoryRetriever(self.memory_store)
+        self.role_router = RoleRouter(self.memory_retriever)
+        self.memory_keeper = MemoryKeeper(self.memory_store, client=self.client)
+
+        # ── Subsystems ─────────────────────────────────────────
         self.sm = StateMachine(State.IDLE)
         self.budget = BudgetTracker(
             max_solver_runs=problem.budget.max_solver_runs,
@@ -78,7 +90,7 @@ class Orchestrator:
         self.worktree = WorktreeManager(self.output_dir)
         self.pre_gate = PreGate(client=self.client)
 
-        # Agents (Programmer and Reviewer get separate client instances for independence)
+        # Agents
         kd = Path(knowledge_dir) if knowledge_dir else None
         self.strategist = Strategist(knowledge_dir=kd, client=self.client)
         self.optimist = Optimist(client=self.client)
@@ -96,6 +108,16 @@ class Orchestrator:
 
         # Cell executor
         self.executor = CellExecutor(self.programmer, self.reviewer, self.solver)
+
+        # ── Phase 3: Parallel execution ────────────────────────
+        self.parallel_executor = ParallelExecutor(
+            self.programmer, self.reviewer, self.solver,
+            self.worktree, self.gatekeeper,
+        )
+
+        # ── L4 Self-evolution state ────────────────────────────
+        self._error_counts: dict[str, int] = {}
+        self._evolution_rules: list[str] = []
 
         # Context
         self.ctx = SessionContext()
@@ -136,6 +158,8 @@ class Orchestrator:
                     await self._handle_summarize()
             except Exception as e:
                 self._log(f"Error in state {state.value}: {e}")
+                # L4: Track error patterns
+                self._track_error_type(str(e), state.value)
                 # Try to gracefully degrade
                 if state in (State.ANALYZE, State.DEBATE, State.GATE, State.EXECUTE, State.VERIFY):
                     self.sm.transition(State.DECIDE)
@@ -280,12 +304,23 @@ class Orchestrator:
         prev_strategies = [r.model_dump() for r in self.ctx.round_records] if self.ctx.round_records else None
         prev_metrics = self.ctx.previous_metrics.custom if self.ctx.previous_metrics else None
 
+        # Phase 2: Inject role-routed memory
+        scene_fp = self.memory_store.build_scene_fingerprint(
+            self.problem.model_dump(), mesh_stats,
+        )
+        memory_context = self.role_router.inject_memory_context(
+            ROLE_STRATEGIST, "", scene_fp,
+        )
+        if self.memory_store.count() > 0:
+            self._log(f"Memory: {self.memory_store.count()} entries, using role-routed context")
+
         result = await self.strategist.generate(
             problem_description=self.problem.problem.description,
             current_mesh_stats=mesh_stats,
             solution_summary=solution_summary,
             previous_metrics=prev_metrics,
             previous_strategies=prev_strategies,
+            memory_context=memory_context,
         )
         self.budget.record_llm_call()
         self.ctx.total_llm_calls += 1
@@ -368,47 +403,40 @@ class Orchestrator:
             selected = strategies[0]
 
         self.ctx._selected_strategy = selected  # type: ignore[attr-defined]
+
+        # Phase 3: Check if we can run parallel (top 2+ strategies, budget allows)
+        composite_scores = decision.get("composite_scores", [])
+        parallel_candidates = self._get_parallel_candidates(strategies, composite_scores)
+        if len(parallel_candidates) >= 2:
+            self.ctx._parallel_strategies = parallel_candidates  # type: ignore[attr-defined]
+            self._log(f"Parallel mode: {len(parallel_candidates)} strategies will execute in parallel")
+        else:
+            self.ctx._parallel_strategies = []
+
         self.sm.transition(State.EXECUTE)
 
     async def _handle_execute(self) -> None:
         self.budget.enter_stage("execute")
         strategy = getattr(self.ctx, "_selected_strategy", {})
+        parallel_strategies = getattr(self.ctx, "_parallel_strategies", [])
         self.ctx.round_number += 1
         round_num = self.ctx.round_number
 
+        # Phase 3: Parallel execution path
+        if len(parallel_strategies) >= 2:
+            await self._execute_parallel(parallel_strategies, round_num)
+            return
+
+        # Serial execution path
         self._log(f"Executing Round {round_num}: {strategy.get('strategy_id', 'unknown')}")
+        wt_path = self._setup_worktree(round_num)
+        worktree_mesh = self._get_worktree_mesh(wt_path)
 
-        # Create isolated worktree
-        wt_name = f"round_{round_num}"
-        wt_path = self.worktree.create(wt_name)
-
-        # Copy inputs to worktree
-        input_files = {}
-        mesh_src = Path(self.ctx.current_mesh_path)
-        if mesh_src.exists():
-            if mesh_src.is_dir():
-                input_files["input_mesh"] = self.ctx.current_mesh_path
-                worktree_mesh = str(wt_path / "input_mesh")
-            else:
-                input_files["current_mesh.msh"] = self.ctx.current_mesh_path
-                worktree_mesh = str(wt_path / "current_mesh.msh")
-        else:
-            worktree_mesh = self.ctx.current_mesh_path
-
-        if self.problem.solver.path:
-            input_files["solver.py"] = self.problem.solver.path
-        self.worktree.copy_inputs(wt_path, input_files)
-
-        # Prepare previous metrics
         prev_metrics = self.ctx.current_metrics.custom if self.ctx.current_metrics else None
-
-        # Track mesh-before for visualization comparison
         mesh_before_path = self.ctx._mesh_before_path if hasattr(self.ctx, "_mesh_before_path") else worktree_mesh
 
-        # Run cell-by-cell execution
         results = await self.executor.execute(
-            strategy=strategy,
-            work_dir=wt_path,
+            strategy=strategy, work_dir=wt_path,
             current_mesh_path=worktree_mesh,
             solver_path=str(wt_path / "solver.py") if self.problem.solver.path else "",
             problem_spec=self.problem.model_dump(),
@@ -416,17 +444,95 @@ class Orchestrator:
             mesh_before_path=mesh_before_path,
         )
 
-        # Track LLM calls from executor
-        self.budget.total_llm_calls += results.get("mesh_generation", type("", (), {"retries": 0})()).retries * 2  # rough estimate
-        self.ctx.total_llm_calls = self.budget.total_llm_calls
+        self._finish_execution(results, wt_path, round_num, strategy)
 
-        # Record solver run
-        self.budget.record_solver_run()
-        self.ctx.solver_runs += 1
+    async def _execute_parallel(
+        self, strategies: list[dict[str, Any]], round_num: int,
+    ) -> None:
+        """Phase 3: Execute multiple strategies in parallel worktrees."""
+        self._log(f"PARALLEL Round {round_num}: {len(strategies)} strategies")
+        for s in strategies:
+            self._log(f"  - {s.get('strategy_id', '?')}")
 
-        # Commit worktree
+        wt_root = self.output_dir / ".worktrees"
+        wt_root.mkdir(parents=True, exist_ok=True)
+
+        prev_metrics = self.ctx.current_metrics.custom if self.ctx.current_metrics else None
+        mesh_before_path = self.ctx._mesh_before_path if hasattr(self.ctx, "_mesh_before_path") else self.ctx.current_mesh_path
+
+        parallel_results = await self.parallel_executor.execute_parallel(
+            strategies=strategies,
+            work_dir_base=wt_root,
+            current_mesh_path=self.ctx.current_mesh_path,
+            solver_path=self.problem.solver.path,
+            problem_spec=self.problem.model_dump(),
+            previous_metrics=prev_metrics,
+            mesh_before_path=mesh_before_path,
+        )
+
+        # Record solver runs
+        for _ in parallel_results:
+            self.budget.record_solver_run()
+            self.ctx.solver_runs += 1
+
+        self._log(f"Parallel results: {self.parallel_executor.merge_metrics(parallel_results)}")
+
+        # Select best result
+        best = self.parallel_executor.select_best(parallel_results)
+        if best:
+            # Find corresponding strategy
+            best_strategy = next(
+                (s for s in strategies if s.get("strategy_id") == best.strategy_id),
+                strategies[0],
+            )
+            self.ctx._selected_strategy = best_strategy  # type: ignore[attr-defined]
+            best_wt = wt_root / best.worktree_name
+            # Build synthetic cell results for downstream processing
+            synth_results = best.cell_results
+            self._finish_execution(synth_results, best_wt, round_num, best_strategy)
+        else:
+            self._log("All parallel strategies failed")
+            self.sm.transition(State.DECIDE)
+
+    def _setup_worktree(self, round_num: int) -> Path:
+        """Create worktree and copy inputs."""
+        wt_name = f"round_{round_num}"
+        wt_path = self.worktree.create(wt_name)
+
+        input_files = {}
+        mesh_src = Path(self.ctx.current_mesh_path)
+        if mesh_src.exists():
+            if mesh_src.is_dir():
+                input_files["input_mesh"] = self.ctx.current_mesh_path
+            else:
+                input_files["current_mesh.msh"] = self.ctx.current_mesh_path
+
+        if self.problem.solver.path:
+            input_files["solver.py"] = self.problem.solver.path
+        self.worktree.copy_inputs(wt_path, input_files)
+        return wt_path
+
+    def _get_worktree_mesh(self, wt_path: Path) -> str:
+        mesh_src = Path(self.ctx.current_mesh_path)
+        if not mesh_src.exists():
+            return self.ctx.current_mesh_path
+        if mesh_src.is_dir():
+            return str(wt_path / "input_mesh")
+        return str(wt_path / "current_mesh.msh")
+
+    def _finish_execution(
+        self,
+        results: dict[str, Any],
+        wt_path: Path,
+        round_num: int,
+        strategy: dict[str, Any],
+    ) -> None:
+        """Common post-execution logic for both serial and parallel paths."""
         all_ok = all(r.success for r in results.values())
-        self.worktree.commit(wt_path, f"Round {round_num}: {strategy.get('strategy_id')} — {'PASS' if all_ok else 'FAIL'}")
+        self.worktree.commit(
+            wt_path,
+            f"Round {round_num}: {strategy.get('strategy_id', '?')} — {'PASS' if all_ok else 'FAIL'}",
+        )
 
         if not all_ok:
             for cell_name, r in results.items():
@@ -635,9 +741,66 @@ class Orchestrator:
 
     async def _handle_summarize(self) -> None:
         self._log("Summarizing results...")
+
+        # Phase 2: Record session to memory
+        for record in self.ctx.round_records:
+            try:
+                ms = {"total_cells": record.mesh_change.get("cells_after", 0)}
+                await self.memory_keeper.record_round(
+                    round_number=record.round,
+                    strategy={"strategy_id": record.strategy_id, "rationale": record.strategy_summary},
+                    before_metrics=record.before,
+                    after_metrics=record.after,
+                    mesh_stats=ms,
+                    problem_spec=self.problem.model_dump(),
+                    claim_verdict=record.verdict,
+                )
+            except Exception as e:
+                self._log(f"Memory record error: {e}")
+
+        # Phase 3 L4: Check for evolution triggers
+        self._check_evolution_triggers()
+
+        if self.memory_store.count() > 0:
+            self._log(f"Memory stored: {self.memory_store.count()} total entries")
+            stats = self.memory_keeper.get_failure_statistics(self.problem.problem.pde_type)
+            self._log(f"  Effectiveness rate: {stats['effectiveness_rate']:.0%}")
+            if stats.get("failure_reasons"):
+                top_reason = list(stats["failure_reasons"].keys())[0]
+                self._log(f"  Top failure reason: {top_reason[:80]}")
+
         self.sm.transition(State.CLOSED)
 
     # ── Helpers ─────────────────────────────────────────────────
+
+    def _get_parallel_candidates(
+        self,
+        strategies: list[dict[str, Any]],
+        composite_scores: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Determine if multiple strategies should run in parallel (Phase 3A)."""
+        valid = []
+        for cs in composite_scores:
+            if cs.get("fatal"):
+                continue
+            composite = cs.get("composite", 0)
+            if composite < 2.5:
+                continue
+            strategy = next(
+                (s for s in strategies if s.get("strategy_id") == cs.get("strategy_id")),
+                None,
+            )
+            if strategy:
+                valid.append((composite, strategy))
+
+        # Need at least 2 and budget for 2 solver runs
+        if len(valid) < 2:
+            return []
+        if self.budget.solver_runs_remaining < 2:
+            return []
+
+        valid.sort(key=lambda x: -x[0])
+        return [s for _, s in valid[:2]]
 
     async def _check_semantic_improvement(self) -> bool:
         """LLM-based semantic quality check when numerical metrics show no change."""
@@ -670,6 +833,61 @@ Respond with JSON: {{"has_improvement": true|false, "reason": "..."}}"""
 
         result = await self.strategist.run_structured(user_message, schema)
         return result.get("has_improvement", False)
+
+    # ── L4 Self-Evolution ────────────────────────────────────────
+
+    def _track_error_type(self, error_str: str, state: str) -> None:
+        """Categorize and track errors for L4 evolution."""
+        error_lower = error_str.lower()
+        if "timeout" in error_lower or "timed out" in error_lower:
+            self._track_error("solver_timeout")
+        elif "infinite" in error_lower or "while true" in error_lower or "unbounded" in error_lower:
+            self._track_error("mesh_script_infinite_loop")
+        elif "review" in error_lower and ("reject" in error_lower or "exhaust" in error_lower or "failed" in error_lower):
+            self._track_error("reviewer_rejection_exhausted")
+        elif "diverge" in error_lower or "residual" in error_lower:
+            self._track_error("solver_diverged")
+        elif "gate" in error_lower and "reject" in error_lower:
+            self._track_error("gate_all_rejected")
+        elif "json" in error_lower or "decode" in error_lower or "parse" in error_lower:
+            pass  # Transient LLM output issues, not structural
+
+    def _track_error(self, error_type: str) -> None:
+        """Track error patterns for L4 self-evolution."""
+        self._error_counts[error_type] = self._error_counts.get(error_type, 0) + 1
+        threshold = 3  # Evolve after 3 occurrences
+
+        if self._error_counts[error_type] >= threshold and error_type not in self._evolution_rules:
+            rule = self._generate_evolution_rule(error_type)
+            if rule:
+                self._evolution_rules.append(error_type)
+                self._log(f"[L4 Evolution] New rule: {rule}")
+
+    def _generate_evolution_rule(self, error_type: str) -> str:
+        """Generate a harness rule from a repeated error pattern."""
+        rules = {
+            "solver_timeout": "PRE-Gate now checks estimated solve time; rejects strategies that increase cells >5x",
+            "mesh_script_infinite_loop": "Programmer prompt now includes 'IMPORTANT: Avoid while loops. Use bounded for-loops.'",
+            "reviewer_rejection_exhausted": "Gatekeeper now requires explicit bounded-loop proof from Strategist",
+            "solver_diverged": "Post-gate convergence margin increased; solver retry reduces dt by 4x per attempt",
+            "gate_all_rejected": "Gatekeeper threshold lowered to 2.0 for next attempt; knowledge base queried for alternatives",
+        }
+        return rules.get(error_type, "")
+
+    def _check_evolution_triggers(self) -> None:
+        """Check accumulated errors for L4 evolution triggers."""
+        for error_type, count in self._error_counts.items():
+            if count >= 3 and error_type not in self._evolution_rules:
+                rule = self._generate_evolution_rule(error_type)
+                if rule:
+                    self._evolution_rules.append(error_type)
+                    self._log(f"[L4] Evolution triggered by '{error_type}' ({count}x): {rule}")
+
+    def get_evolution_status(self) -> dict[str, Any]:
+        return {
+            "error_counts": self._error_counts,
+            "rules_activated": self._evolution_rules,
+        }
 
     def _build_result(self) -> Result:
         summary = ResultSummary(

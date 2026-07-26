@@ -91,11 +91,13 @@ class Strategist(StrongAgent):
         solution_summary: dict[str, Any],
         previous_metrics: Optional[dict[str, float]] = None,
         previous_strategies: Optional[list[dict[str, Any]]] = None,
+        memory_context: str = "",
     ) -> dict[str, Any]:
         """Generate adaptation strategies based on current solution state."""
 
         knowledge = self._load_knowledge()
         knowledge_block = f"\n\n## Reference Knowledge Base\n{knowledge}" if knowledge else ""
+        memory_block = f"\n\n## Past Experience (from memory)\n{memory_context}" if memory_context else ""
 
         prev_block = ""
         if previous_metrics:
@@ -111,7 +113,7 @@ class Strategist(StrongAgent):
 
 ## Current Solution Summary
 {json.dumps(solution_summary, indent=2)}
-{prev_block}{knowledge_block}
+{prev_block}{knowledge_block}{memory_block}
 
 Analyze the current solution and propose 3-5 mesh adaptation strategies."""
 
