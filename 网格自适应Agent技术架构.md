@@ -1,8 +1,8 @@
 # 网格自适应 Agent 技术架构文档
 
 > 基于 15 个 AI 自主科研系统的纵向分析设计
-> 日期：2026-07-21
-> 版本：Phase 1 最小闭环
+> 日期：2026-07-27
+> 版本：Phase 3 完成 (记忆 + 并行 + 自演化)
 
 ---
 
@@ -83,15 +83,16 @@
 
 **Phase 1 Agent 清单（6 个 LLM Agent + 1 程序化 Orchestrator）：**
 
-| # | Agent | 职责 | LLM 强度 |
-|---|-------|------|---------|
-| 1 | **Strategist** | 读求解结果 + 检索策略记忆 → 提出 3-5 个加密/放粗方案 | 强模型 |
-| 2 | **Optimist** | 论证每个方案为什么有效，找支持证据 | 强模型 |
-| 3 | **Skeptic** | 论证每个方案可能失败的原因 + 网格质量 + 物理合理性 | 强模型 |
-| 4 | **Gatekeeper** | 综合辩论结果 → 输出最佳策略；全否决则终止本轮 | 中模型 |
-| 5a | **Programmer** | 根据策略写/改网格生成代码和求解器参数 | 强模型 |
-| 5b | **Reviewer** | 审查代码逻辑、数值稳定性、离散化正确性 | 强模型 + 不同实例 |
-| 6 | **Memory Keeper** | 摘要经验 → 写入持久记忆（Phase 2） | 中模型 |
+| # | Agent | 职责 | LLM 强度 | 状态 |
+|---|-------|------|---------|------|
+| 1 | **Strategist** | 读求解结果 + 检索策略记忆 → 提出 3-5 个加密/放粗方案 | 强模型 | ✅ |
+| 2 | **Optimist** | 论证每个方案为什么有效，找支持证据 | 强模型 | ✅ |
+| 3 | **Skeptic** | 论证每个方案可能失败的原因 + 网格质量 + 物理合理性 | 强模型 | ✅ |
+| 4 | **Gatekeeper** | 综合辩论结果 → 输出最佳策略；全否决则终止本轮 | 中模型 | ✅ |
+| 5a | **Programmer** | 根据策略写/改网格生成代码和求解器参数 | 强模型 | ✅ |
+| 5b | **Reviewer** | 审查代码逻辑、数值稳定性、离散化正确性 | 强模型 + 不同实例 | ✅ |
+| 6 | **Memory Keeper** | 每轮摘要 → 写入持久记忆 + 角色路由 | 中模型 | ✅ |
+| 7 | **Parallel Executor** | 多策略并行 worktree 调度 + 参数扫描 | 规则 (LLM 判层次B) | ✅ |
 
 ### 2.2 各 Agent 详细设计
 
@@ -825,11 +826,12 @@ mesh_agent/
 │   │   ├── gatekeeper.py          # 综合决策
 │   │   ├── programmer.py          # 代码生成/修改
 │   │   ├── reviewer.py            # 代码审查（不同实例）
-│   │   └── memory_keeper.py       # 记忆管理（Phase 2）
+│   │   ├── memory_keeper.py       # 记忆管理
+│   │   └── role_router.py         # 角色路由
 │   ├── executor/                  # 执行层
 │   │   ├── worktree_manager.py    # Git Worktree 管理
 │   │   ├── cell_executor.py       # Cell-by-Cell 执行 + 重试
-│   │   └── parallel_executor.py   # 并行执行（Phase 3）
+│   │   ├── parallel_executor.py   # 并行执行
 │   ├── memory/                    # 记忆系统
 │   │   ├── store.py               # 记忆存储接口
 │   │   ├── retriever.py           # 混合检索（结构化 + 向量）
@@ -886,39 +888,33 @@ mesh_agent/
 **目标**: 一个算例跑通 IDLE → ANALYZE → DEBATE → GATE → EXECUTE → VERIFY → DECIDE → CLOSED
 
 **包含**:
-- [x] Orchestrator 状态机（串行模式）
-- [x] Strategist（策略生成 + 基础会话内检索）
-- [x] Optimist + Skeptic 辩论（3 角色）
-- [x] Gatekeeper（综合评分 → 选定最佳策略）
+- [x] Orchestrator 状态机（串行 + 并行模式）
+- [x] Strategist（策略生成 + 会话内检索 + 跨会话记忆）
+- [x] Optimist + Skeptic 辩论（3-5 角色）
+- [x] Gatekeeper（综合评分 → 选定最佳策略 + 并行候选判定）
 - [x] Programmer + Reviewer（不同 LLM 实例）
-- [x] Cell-by-Cell 执行（网格生成 + 求解 + 后处理）
-- [x] 轻量重试循环（每步 ≤ 4 次）
+- [x] Cell-by-Cell 执行（网格生成 + 求解 + 后处理 + 可视化）
+- [x] 轻量重试循环（每步 ≤ 6 次）
 - [x] PRE-Gate（实验设计逻辑检查）
 - [x] POST-Gate（网格质量 + 求解收敛 + 声明验证）
 - [x] Claim Ledger（声明 + 证据绑定 + 自动验证）
-- [x] 单 Worktree 执行
+- [x] 单/多 Worktree 执行
 - [x] 预算 L1（硬限制）+ L2（每阶段配额）+ L5（早停）
-- [x] CLI 入口
+- [x] CLI 入口 + .env 配置
+
+**Phase 2 完成**:
+- [x] Memory Keeper Agent
+- [x] L2 持久结构化记忆（混合检索）
+- [x] L3 角色路由记忆注入
+- [x] 策略检索独立 Agent 管理
+- [x] GRAFT Fingerprint 嵌入接口
+
+**Phase 3 完成**:
+- [x] Parallel Executor Agent
+- [x] 多 Worktree 并行执行
+- [x] 层次 B（参数级并行）LLM 判定
+- [x] 并行结果汇合 + 比较
+- [x] L4 自演化接口
 
 **不包含**:
-- [ ] 持久记忆（Phase 2）
-- [ ] 并行执行（Phase 3）
-- [ ] L4 自演化（Phase 3）
-- [ ] Web API（Phase 3）
-
-### Phase 2: 持久记忆 + 策略检索升级
-
-- [ ] Memory Keeper Agent
-- [ ] L2 持久结构化记忆（混合检索）
-- [ ] L3 角色路由记忆注入
-- [ ] 策略检索独立 Agent 管理
-- [ ] GRAFT Fingerprint 嵌入接口
-
-### Phase 3: 并行 + 自演化
-
-- [ ] Parallel Executor Agent
-- [ ] 多 Worktree 并行执行
-- [ ] 层次 B（参数级并行）LLM 判定
-- [ ] 并行结果汇合 + 比较
-- [ ] L4 自演化接口
 - [ ] Web API
