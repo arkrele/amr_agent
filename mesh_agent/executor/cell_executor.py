@@ -69,7 +69,7 @@ class CellExecutor:
         if not mesh_result.success:
             return results
 
-        new_mesh_path = self._find_mesh(work_dir, current_mesh_path)
+        new_mesh_path = self._find_mesh_dir(work_dir, current_mesh_path)
 
         # Cell 1.5: generate solver if none provided
         actual_solver = self.solver
@@ -306,11 +306,23 @@ class CellExecutor:
     # ── Helpers ─────────────────────────────────────────────────
 
     @staticmethod
-    def _find_mesh(work_dir: Path, fallback: str) -> Path:
-        candidates = list(work_dir.glob("**/*.msh"))
-        if candidates:
-            return candidates[0]
-        return Path(fallback)
+    def _find_mesh_dir(work_dir: Path, fallback: str) -> Path:
+        """Find the directory containing the newest mesh files (prefer output/)."""
+        # Prefer output directory
+        output_dir = work_dir / "output"
+        if output_dir.exists():
+            mesh_files = list(output_dir.glob("mesh.txt")) + list(output_dir.glob("*.msh"))
+            if mesh_files:
+                return output_dir
+
+        # Fall back to recursive search
+        for pattern in ["**/output/mesh.txt", "**/output/*.msh", "**/mesh.txt", "**/*.msh"]:
+            candidates = list(work_dir.glob(pattern))
+            if candidates:
+                return candidates[0].parent
+
+        p = Path(fallback)
+        return p.parent if p.is_file() else p
 
     @staticmethod
     def _adjust_params(params: dict[str, Any], attempt: int, _error: str) -> dict[str, Any]:

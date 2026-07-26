@@ -31,7 +31,11 @@ class Agent:
     @property
     def client(self) -> AsyncOpenAI:
         if self._client is None:
-            kwargs = {"api_key": os.environ.get("OPENAI_API_KEY")}
+            kwargs = {
+                "api_key": os.environ.get("OPENAI_API_KEY"),
+                "timeout": float(os.environ.get("MESH_AGENT_API_TIMEOUT", "120")),
+                "max_retries": 2,
+            }
             base_url = os.environ.get("OPENAI_BASE_URL")
             if base_url:
                 kwargs["base_url"] = base_url

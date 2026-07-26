@@ -42,7 +42,11 @@ from mesh_agent.verification.pre_gate import PreGate
 
 
 def _make_client() -> AsyncOpenAI:
-    kwargs = {"api_key": os.environ.get("OPENAI_API_KEY", "")}
+    kwargs = {
+        "api_key": os.environ.get("OPENAI_API_KEY", ""),
+        "timeout": float(os.environ.get("MESH_AGENT_API_TIMEOUT", "180")),
+        "max_retries": 2,
+    }
     base_url = os.environ.get("OPENAI_BASE_URL")
     if base_url:
         kwargs["base_url"] = base_url
@@ -470,10 +474,9 @@ class Orchestrator:
             mesh_before_path=mesh_before_path,
         )
 
-        # Record solver runs
-        for _ in parallel_results:
-            self.budget.record_solver_run()
-            self.ctx.solver_runs += 1
+        # Record 1 solver round (parallel strategies count as 1 round)
+        self.budget.record_solver_run()
+        self.ctx.solver_runs += 1
 
         self._log(f"Parallel results: {self.parallel_executor.merge_metrics(parallel_results)}")
 
