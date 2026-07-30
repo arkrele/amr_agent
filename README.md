@@ -19,70 +19,52 @@ pip install -e .
 
 ### 3. 配置
 
-复制并编辑环境变量文件：
-
-```bash
-cp .env.example .env
-```
-
-`.env` 内容：
+项目根目录已有 `.env` 模板。编辑填入 API 信息：
 
 ```env
 OPENAI_API_KEY=sk-your-key-here
-OPENAI_BASE_URL=https://api.deepseek.com   # 或其他 OpenAI 兼容地址
-MESH_AGENT_API_TIMEOUT=180                 # API 超时(秒)
+OPENAI_BASE_URL=https://api.deepseek.com
+MESH_AGENT_API_TIMEOUT=180
 ```
 
-可选：指定模型
+### 4. 编写你的输入
 
-```env
-MESH_AGENT_STRONG_MODEL=deepseek-chat       # 策略/辩论/编程用 (默认)
-MESH_AGENT_LIGHT_MODEL=deepseek-chat        # Gatekeeper/记忆用 (默认)
+用户在 **`workspace/`** 目录中编写输入：
+
+```bash
+cd workspace/
 ```
 
-### 4. 准备算例
+| 文件 | 作用 | 如何写 |
+|------|------|--------|
+| `problem.yaml` | **问题描述 + 配置** | 复制模板，填写你的物理问题、网格路径、预算 |
+| `solver.py` | **你的求解器** | 复制 `solver_template.py`，实现 `read_mesh()` 和 `run_solver()` |
+| `mesh/` | **初始网格文件** | 把你的网格文件放到这个目录 |
 
-创建 `problem.yaml`：
+一个完整的工作目录示例：
 
-```yaml
-problem:
-  description: >
-    描述你的物理问题。包括 PDE 类型、边界条件、已知物理特征（边界层、激波等）。
-    越详细，Agent 生成的策略越精准。
-  pde_type: "navier-stokes"       # 或 convection-diffusion / euler / 自定义
-  geometry: "2d"                  # 或 3d / axisymmetric
-  boundary_conditions:
-    inlet: {type: "velocity_inlet", u: 1.0, v: 0.0}
-    wall: {type: "no_slip"}
-    outlet: {type: "pressure_outlet", p: 0.0}
-
-solver:
-  type: "user_template"           # user_template | agent_generated
-  path: "./my_solver.py"          # 求解器路径 (agent_generated 时留空)
-  interface: "generic_cli"        # 求解器接口类型
-  params:                         # 可调参数 (Agent 会修改这些)
-    reynolds: 100
-    dt: 0.001
-    max_iterations: 5000
-
-mesh:
-  initial: "./mesh"               # 初始网格目录或文件
-  format: "gmsh"                  # gmsh | text-1d | structured-1d-text
-  max_cells: 100000               # 网格单元数上限
-
-budget:
-  max_solver_runs: 5              # 最多运行几次求解器
-  max_wall_time_minutes: 120      # 最长运行时间
-
-output:
-  target_metrics:                 # 要追踪的指标
-    - "drag_coefficient"
-    - "lift_coefficient"
-  convergence_tolerance: 0.01     # 收敛阈值
-  output_dir: "./output"
+```
+workspace/
+├── problem.yaml          ← 你写的问题描述和配置
+├── solver.py             ← 你的求解器 (从 solver_template.py 复制)
+├── mesh/                 ← 初始网格文件
+│   └── your_mesh.msh
+├── output/               ← 结果输出 (自动生成)
+│   ├── result.yaml
+│   └── *.png
+└── memory/               ← 跨会话记忆 (自动生成)
 ```
 
-### 5. 求解器接口规范
+### 5. 运行
+
+```bash
+# 在 workspace 目录内
+mesh-agent run -p problem.yaml -o ./output -m ./memory
+
+# 或者直接双击 run.bat (Windows)
+```
+
+### 6. 求解器接口规范
 
 无论用户自己写求解器还是让 Agent 生成，求解器必须接受以下 CLI 参数：
 
@@ -115,25 +97,6 @@ python solver.py --mesh <mesh_dir> --output-dir <output_dir> --params '<json>'
   "min_jacobian": 0.2,
   "has_inverted_cells": false
 }
-```
-
-### 6. 运行
-
-```bash
-# 使用用户提供的求解器模板
-mesh-agent run -p problem.yaml -o ./output
-
-# 让 Agent 自己写求解器 (solver.type: agent_generated)
-mesh-agent run -p problem.yaml -o ./output
-
-# 启用跨会话记忆
-mesh-agent run -p problem.yaml -o ./output -m ./memory
-
-# 指定策略知识库
-mesh-agent run -p problem.yaml -o ./output -k ./my_knowledge
-
-# 验证 problem.yaml 格式
-mesh-agent validate -p problem.yaml
 ```
 
 ### 7. 解读输出

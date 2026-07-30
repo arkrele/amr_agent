@@ -21,3 +21,8 @@ output/
 test_output*/
 test_out*/
 test_final*/
+
+# Workspace (user files)
+workspace/output/*
+workspace/memory/
+workspace/solver.py

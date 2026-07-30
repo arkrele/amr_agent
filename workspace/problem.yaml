@@ -1,0 +1,58 @@
+# ==============================================================
+# 网格自适应 Agent — 用户输入文件
+# ==============================================================
+# 复制此文件到你的工作目录，修改以下内容后运行:
+#   mesh-agent run -p problem.yaml -o ./output
+# ==============================================================
+
+problem:
+  # ── 问题描述 (自然语言，越详细越好) ──────────────────────
+  description: >
+    在此描述你的物理问题。建议包含：
+    1. 什么 PDE？什么物理场景？
+    2. 预计有哪些物理特征（边界层、激波、尾流、分离区等）？
+    3. 初始网格存在什么问题？
+    4. 期望 Agent 做什么？
+
+    示例: "二维圆柱绕流，Re=100，不可压缩层流。自由来流从左向右(U=1.0)，
+    预计在圆柱后方形成卡门涡街。初始均匀三角形网格无法解析边界层(y+≈10)。
+    需要在圆柱表面加密使 y+ < 1，尾流区加密以捕获涡脱落。"
+
+  # ── 基本信息 ────────────────────────────────────────────
+  pde_type: "user-defined"        # navier-stokes | convection-diffusion | euler | plasma | ...
+  geometry: "2d"                  # 1d | 2d | 3d | axisymmetric
+  boundary_conditions:            # 自由定义，Agent 会理解
+    inlet: {type: "velocity_inlet", u: 1.0, v: 0.0}
+    wall:  {type: "no_slip"}
+    outlet: {type: "pressure_outlet", p: 0.0}
+
+solver:
+  # ── 求解器配置 ────────────────────────────────────────────
+  # 两个选择：
+  #   A) 你自己提供求解器 → type: user_template, path: 指向你的脚本
+  #   B) 让 Agent 写求解器 → type: agent_generated, path: ""
+  # ----------------------------------------------------------
+  type: "user_template"           # user_template | agent_generated
+  path: "./solver.py"             # 你的求解器路径 (type=agent_generated 时留空)
+  interface: "generic_cli"        # 固定值，不要改
+  params:                         # Agent 可以调整的参数
+    reynolds: 100
+    dt: 0.001
+    max_iterations: 5000
+
+mesh:
+  initial: "./mesh"               # 初始网格的目录或文件路径
+  format: "gmsh"                  # gmsh | text-1d | structured-1d-text | ...
+  max_cells: 100000               # 单个网格的最大单元数
+
+budget:
+  max_solver_runs: 5              # 最多运行几次求解器
+  max_wall_time_minutes: 120      # 最长运行时间 (分钟)
+  # 不填则 Agent 自动估算
+
+output:
+  target_metrics:                 # 希望追踪的指标名
+    - "drag_coefficient"
+    - "lift_coefficient"
+  convergence_tolerance: 0.01     # 指标变化 < 此值认为已收敛
+  output_dir: "./output"
