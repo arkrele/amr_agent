@@ -29,30 +29,53 @@ MESH_AGENT_API_TIMEOUT=180
 
 ### 4. 编写你的输入
 
-用户在 **`workspace/`** 目录中编写输入：
+用户在 **`workspace/`** 目录中准备输入。根据你的情况，**三种方式任选**：
 
-```bash
-cd workspace/
+#### 方式 1: 你已有求解器（推荐）
+
+只需编辑 `problem.yaml`，将 `solver.path` 指向你的求解脚本：
+
+```yaml
+solver:
+  type: "user_template"
+  path: "./my_solver.py"      # 你的求解器路径
 ```
 
-| 文件 | 作用 | 如何写 |
-|------|------|--------|
-| `problem.yaml` | **问题描述 + 配置** | 复制模板，填写你的物理问题、网格路径、预算 |
-| `solver.py` | **你的求解器** | 复制 `solver_template.py`，实现 `read_mesh()` 和 `run_solver()` |
-| `mesh/` | **初始网格文件** | 把你的网格文件放到这个目录 |
+你的求解器只要接受 `--mesh <dir> --output-dir <dir> --params '<json>'` 这三个参数即可。
+参见 `solver_template.py`（Python）或 `solver_wrapper.sh`（Shell）。
+网格放到 `mesh/` 目录。
 
-一个完整的工作目录示例：
+#### 方式 2: 让 Agent 自己写求解器
+
+```yaml
+solver:
+  type: "agent_generated"
+  path: ""
+```
+
+Agent 自动生成 Python 求解器。仅适合简单 PDE（1D/2D 基础方程）。
+
+#### 方式 3: 用内置测试算例
+
+```bash
+mesh-agent run -p tests\test_convection_diffusion\problem.yaml -o .\test_output
+```
+
+不需要准备任何文件，直接看效果。
+
+#### 工作目录结构
 
 ```
 workspace/
-├── problem.yaml          ← 你写的问题描述和配置
-├── solver.py             ← 你的求解器 (从 solver_template.py 复制)
-├── mesh/                 ← 初始网格文件
+├── problem.yaml           ← 你写的问题描述和配置
+├── solver.py              ← 你的求解器 (方式1, 从模板复制)
+├── solver_wrapper.sh      ← Shell 版求解器模板 (方式1)
+├── mesh/                  ← 初始网格文件
 │   └── your_mesh.msh
-├── output/               ← 结果输出 (自动生成)
+├── output/                ← 结果 (自动生成)
 │   ├── result.yaml
 │   └── *.png
-└── memory/               ← 跨会话记忆 (自动生成)
+└── memory/                ← 跨会话记忆 (自动生成)
 ```
 
 ### 5. 运行

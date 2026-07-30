@@ -122,9 +122,15 @@ def interactive() -> dict:
     print("  Mesh Agent — 交互式启动")
     print("=" * 60)
     print()
+    print("【网格与求解器 — 三种方式任选】")
+    print()
+    print("  方式 1: 你已有求解器 → 提供可执行脚本路径，Agent 调用它")
+    print("  方式 2: Agent 自己写求解器 → 仅 Python 能写的简单 PDE")
+    print("  方式 3: 直接用内置测试算例 → 1D 对流-扩散，无需准备文件")
+    print()
 
     desc_lines = []
-    print("请输入问题描述 (输入空行结束):")
+    print("首先，描述你的物理问题 (输入空行结束):")
     while True:
         line = input("  > ")
         if not line:
@@ -132,26 +138,43 @@ def interactive() -> dict:
         desc_lines.append(line)
 
     if not desc_lines:
-        print("使用默认描述: 二维圆柱绕流 Re=100")
-        desc_lines = ["二维圆柱绕流，Re=100，不可压缩层流。",
-                      "预计圆柱后方形成卡门涡街，需要在尾流区和边界层加密。"]
-
+        desc_lines = ["需提供问题描述"]
     description = " ".join(desc_lines)
 
+    print()
+    print("选择求解器方式:")
+    print("  [1] 我有求解器（Python/Shell/exe 均可）")
+    print("  [2] 让 Agent 自己写")
+    print("  [3] 用内置测试算例")
+    choice = input("选 [1]/2/3: ").strip()
+
+    if choice == "3":
+        print("\n使用内置 1D 对流-扩散测试算例。不需要准备任何文件。")
+        return {
+            "description": description,
+            "pde_type": "convection-diffusion-1d",
+            "mode": "agent_generated",
+            "solver_path": "",
+            "max_cells": 200,
+            "max_runs": 3,
+            "max_time": 10,
+            "metrics": "max_error, l2_error",
+        }
+
+    if choice == "2":
+        solver_path = ""
+    else:
+        solver_path = input("求解器路径 [./solver.py]: ").strip() or "./solver.py"
+        if not Path(solver_path).exists():
+            print(f"  [警告] {solver_path} 不存在，请确认路径正确")
+
     pde = input("PDE 类型 [user-defined]: ").strip() or "user-defined"
-
-    use_solver = input("已有求解器? (y/n) [y]: ").strip().lower()
-    solver_path = "./solver.py" if use_solver != "n" else ""
-
-    max_cells = input("网格单元数上限 [100000]: ").strip()
-    max_cells = int(max_cells) if max_cells else 100000
-
-    max_runs = input("求解器最多运行次数 [5]: ").strip()
-    max_runs = int(max_runs) if max_runs else 5
-
-    max_time = input("最长运行时间(分钟) [120]: ").strip()
-    max_time = int(max_time) if max_time else 120
-
+    max_cells_s = input("网格单元数上限 [100000]: ").strip()
+    max_cells = int(max_cells_s) if max_cells_s else 100000
+    max_runs_s = input("求解器最多运行次数 [5]: ").strip()
+    max_runs = int(max_runs_s) if max_runs_s else 5
+    max_time_s = input("最长运行时间(分钟) [120]: ").strip()
+    max_time = int(max_time_s) if max_time_s else 120
     metrics = input("目标指标 (逗号分隔) [drag_coefficient, lift_coefficient]: ").strip()
     metrics = metrics or "drag_coefficient, lift_coefficient"
 
